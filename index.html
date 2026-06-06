@@ -547,7 +547,7 @@ body.shake { animation: bshake .32s ease-out; }
         Silent<span class="sub-word">Spellcraft</span>
       </div>
       <div class="hero-rule"></div>
-      <p class="hero-tagline">Defend your enchanted grove. Cast spells with your hands. Learn ASL fingerspelling — one letter at a time.</p>
+      <p class="hero-tagline">Defend your enchanted grove. Cast spells with your hands. Learn ASL fingerspelling - one letter at a time.</p>
       <div class="cta-row">
         <button class="btn-primary" id="btn-land-start">Begin the Magic</button>
         <button class="btn-ghost"   id="btn-land-ref">ASL Guide</button>
@@ -557,7 +557,7 @@ body.shake { animation: bshake .32s ease-out; }
         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
       <p class="cam-congrats" id="cam-congrats">
-        <span class="cam-dot"></span>Camera ready — your signs will be detected live
+        <span class="cam-dot"></span>Camera ready - your signs will be detected live
       </p>
     </div>
   </section>
@@ -577,13 +577,13 @@ body.shake { animation: bshake .32s ease-out; }
       <div class="howto-cell">
         <div class="howto-num">03</div>
         <div class="howto-title">Learn Gradually</div>
-        <div class="howto-body">Level 1 starts with just A · B · C · D · E. New signs unlock each stage — never overwhelming.</div>
+        <div class="howto-body">Level 1 starts with just A, B, C, D, E. New signs unlock each stage - never overwhelming.</div>
       </div>
     </div>
     <div class="alpha-section" id="alpha-anchor">
       <div class="alpha-label">All 24 letters you will learn</div>
       <div class="alpha-strip" id="land-strip"></div>
-      <p class="alpha-note">J and Z are omitted — they require motion gestures.</p>
+      <p class="alpha-note">J and Z are omitted - they require motion gestures.</p>
     </div>
   </section>
 </div>
@@ -640,22 +640,22 @@ body.shake { animation: bshake .32s ease-out; }
       <canvas id="cam-canvas"></canvas>
       <div id="cam-you">YOUR HAND</div>
       <div id="cam-letter-big"></div>
-      <div id="cam-status">Starting camera…</div>
+      <div id="cam-status">Starting camera...</div>
     </div>
     <div id="hold-wrap"><div id="hold-fill"></div></div>
     <div id="detect-panel">
       <div id="detect-label">Detected sign</div>
-      <div id="detect-letter">—</div>
+      <div id="detect-letter">-</div>
       <div id="detect-conf"></div>
     </div>
     <div id="tip-panel">Tip: Keep your hand at chest height</div>
   </div>
 
-  <button id="ref-btn">✦ ASL Guide</button>
+  <button id="ref-btn">ASL Guide</button>
   <div id="ref-sheet">
     <div id="ref-head">
       <span>ASL Hand Signs</span>
-      <button id="ref-close">✕</button>
+      <button id="ref-close">X</button>
     </div>
     <div id="ref-grid"></div>
   </div>
@@ -671,7 +671,7 @@ body.shake { animation: bshake .32s ease-out; }
 
   <div id="screen-over" class="gscreen hidden">
     <div class="card">
-      <h2 style="color:var(--bubblegum)">The Grove Falls…</h2>
+      <h2 style="color:var(--bubblegum)">The Grove Falls...</h2>
       <p>The creatures broke through your defences.</p>
       <span class="score-line" id="goscore"></span>
       <button class="bigbtn"           id="btn-restart">Try Again</button><br>
@@ -685,7 +685,7 @@ body.shake { animation: bshake .32s ease-out; }
       <p  id="lcsub"></p>
       <p  class="new-letters" id="lcnew"></p>
       <span class="score-line" id="lcscore"></span>
-      <button class="bigbtn" id="btn-next-level">Continue ✦</button>
+      <button class="bigbtn" id="btn-next-level">Continue</button>
     </div>
   </div>
 </div>
@@ -784,6 +784,23 @@ var detecting   = false;
 var lastLMs     = null;  /* most recent landmarks from MediaPipe */
 var mpHands     = null;
 var mpCamera    = null;
+var lastDetected = null; /* last classified letter, used by drawFrame overlay */
+var lmHistory   = [];    /* rolling buffer for landmark smoothing */
+var LM_SMOOTH   = 4;     /* frames to average */
+
+function smoothLandmarks(lms) {
+  if (!lms) { lmHistory = []; return null; }
+  lmHistory.push(lms);
+  if (lmHistory.length > LM_SMOOTH) lmHistory.shift();
+  if (lmHistory.length === 1) return lms;
+  var n = lms.length, out = [];
+  for (var i = 0; i < n; i++) {
+    var sx = 0, sy = 0, sz = 0;
+    lmHistory.forEach(function(f) { sx += f[i].x; sy += f[i].y; sz += (f[i].z || 0); });
+    out.push({ x: sx / lmHistory.length, y: sy / lmHistory.length, z: sz / lmHistory.length });
+  }
+  return out;
+}
 
 /* ============================================================
    CANVAS SETUP — fixed physical size, drawn every MP frame
@@ -852,7 +869,7 @@ function buildStars() {
 }
 function buildRunes() {
   var layer = gid('rune-layer'); if (!layer) return;
-  ['A','B','✦','C','D','✦','E','F'].forEach(function(ch,i) {
+  ['A','B','C','D','E','F','G','H'].forEach(function(ch,i) {
     var el = document.createElement('div');
     el.className = 'rune-drift';
     el.textContent = ch;
@@ -1068,9 +1085,95 @@ function classifyASL(lm) {
 }
 
 /* ============================================================
+   SIMPLE IN-BROWSER KNN (landmark-based) FOR IMPROVED DETECTION
+   - Collects normalized landmark vectors per letter
+   - Performs k-NN on Euclidean distance when geometric rules fail
+   - Stores samples in localStorage and supports import/export
+============================================================ */
+var knnSamples = {}; /* { 'A': [vec, vec], ... } */
+var KNN_K = 5;
+
+function extractFeatureVector(lm) {
+  var W = lm[0];
+  var scale = lmDist(W, lm[9]) || 0.001;
+  var v = [];
+  for (var i = 0; i < lm.length; i++) {
+    /* mirror x so feature space matches drawn/mirrored coords */
+    var x = (1 - lm[i].x) - W.x;
+    var y = lm[i].y - W.y;
+    var z = (lm[i].z || 0) - (W.z || 0);
+    v.push(x / scale, y / scale, z / scale);
+  }
+  return v;
+}
+
+function collectSampleFor(letter, lms) {
+  if (!letter || !lms) return;
+  var v = extractFeatureVector(lms);
+  knnSamples[letter] = knnSamples[letter] || [];
+  knnSamples[letter].push(v);
+  saveSamplesLocal();
+  updateSampleCountUI();
+}
+
+function knnClassify(lms) {
+  if (!lms) return null;
+  var v = extractFeatureVector(lms);
+  var dists = [];
+  for (var L in knnSamples) {
+    knnSamples[L].forEach(function(s) {
+      var d = 0;
+      for (var i = 0; i < v.length; i++) {
+        var diff = v[i] - s[i]; d += diff * diff;
+      }
+      dists.push({ label: L, dist: Math.sqrt(d) });
+    });
+  }
+  if (!dists.length) return null;
+  dists.sort(function(a, b) { return a.dist - b.dist; });
+  var k = Math.min(KNN_K, dists.length);
+  var cnt = {};
+  for (var i = 0; i < k; i++) cnt[dists[i].label] = (cnt[dists[i].label] || 0) + 1;
+  var best = null, bestc = 0;
+  for (var L in cnt) if (cnt[L] > bestc) { best = L; bestc = cnt[L]; }
+  var avgDist = dists.slice(0, k).reduce(function(s, x) { return s + x.dist; }, 0) / k;
+  if (bestc >= Math.ceil(k / 2) && avgDist < 1.6) return best;
+  return null;
+}
+
+function saveSamplesLocal() {
+  try { localStorage.setItem('asl_knn_samples', JSON.stringify(knnSamples)); } catch (e) {}
+}
+
+function loadSamplesLocal() {
+  try {
+    var j = localStorage.getItem('asl_knn_samples');
+    if (j) { knnSamples = JSON.parse(j); }
+  } catch (e) { knnSamples = {}; }
+  updateSampleCountUI();
+}
+
+function clearSamples() { knnSamples = {}; saveSamplesLocal(); updateSampleCountUI(); }
+
+function updateSampleCountUI() {}
+
+/* load any previously saved samples from localStorage */
+setTimeout(loadSamplesLocal, 200);
+
+/* Returns the letter of the most-urgent (oldest alive) enemy, or null */
+function nearestEnemyLetter() {
+  if (!G || !G.enemies) return null;
+  var best = null;
+  G.enemies.forEach(function(e) {
+    if (!e.dead && (!best || e.id < best.id)) best = e;
+  });
+  return best ? best.letter : null;
+}
+
+/* ============================================================
    MEDIAPIPE SKELETON DRAWING
    Draw directly onto cam-canvas every time MP gives us results.
-   This is the correct pattern — no separate RAF mirror loop.
+   This is the correct pattern - no separate RAF mirror loop.
 ============================================================ */
 
 /* MediaPipe official hand connections (21 landmarks) */
@@ -1083,13 +1186,12 @@ var HAND_CONNECTIONS = [
   [5,9],[9,13],[13,17],[0,17],   /* palm */
 ];
 
-function drawFrame(results) {
+function drawFrame(results, lmsOverride) {
   if (!camCtx) return;
 
   var W = CAM_W, H = CAM_H;
   camCtx.clearRect(0, 0, W, H);
 
-  /* Flip video horizontally — makes it feel like a mirror for the user */
   if (camVideo && camVideo.readyState >= 2) {
     camCtx.save();
     camCtx.translate(W, 0);
@@ -1098,33 +1200,34 @@ function drawFrame(results) {
     camCtx.restore();
   }
 
-  /* If no hand detected — done */
-  if (!results || !results.multiHandLandmarks || !results.multiHandLandmarks.length) return;
+  var lms = lmsOverride || (results && results.multiHandLandmarks && results.multiHandLandmarks[0]);
+  if (!lms) return;
 
-  var lms = results.multiHandLandmarks[0];
+  var targetLetter = nearestEnemyLetter();
+  var isMatch = !!(lastDetected && G && G.on && lastDetected === targetLetter);
 
-  /* ── Draw skeleton bones ── */
+  var fingerColors = isMatch
+    ? ['#5ecf6e','#7de08a','#a8f0b0','#2d6b38','#6ed47e']
+    : ['#FB6376','#FCB1A6','#FFDCCC','#5D2A42','#fb9063'];
+
+  var groups = [
+    [[0,1],[1,2],[2,3],[3,4]],
+    [[0,5],[5,6],[6,7],[7,8]],
+    [[0,9],[9,10],[10,11],[11,12]],
+    [[0,13],[13,14],[14,15],[15,16]],
+    [[0,17],[17,18],[18,19],[19,20]],
+  ];
+  var palmConns = [[5,9],[9,13],[13,17],[0,17]];
+
   camCtx.lineWidth = 2.5;
   camCtx.lineCap   = 'round';
   camCtx.lineJoin  = 'round';
-
-  /* Finger connections — colour by finger group */
-  var fingerColors = ['#FB6376','#FCB1A6','#FFDCCC','#5D2A42','#fb9063'];
-  var groups = [
-    [[0,1],[1,2],[2,3],[3,4]],          /* thumb    */
-    [[0,5],[5,6],[6,7],[7,8]],          /* index    */
-    [[0,9],[9,10],[10,11],[11,12]],     /* middle   */
-    [[0,13],[13,14],[14,15],[15,16]],   /* ring     */
-    [[0,17],[17,18],[18,19],[19,20]],   /* pinky    */
-  ];
-  var palmConns = [[5,9],[9,13],[13,17],[0,17]];
 
   groups.forEach(function(group, gi) {
     camCtx.strokeStyle = fingerColors[gi];
     camCtx.shadowColor = fingerColors[gi];
     camCtx.shadowBlur  = 4;
     group.forEach(function(c) {
-      /* Mirror x to match the flipped video (selfieMode:false, we flip manually) */
       var ax = (1 - lms[c[0]].x) * W, ay = lms[c[0]].y * H;
       var bx = (1 - lms[c[1]].x) * W, by = lms[c[1]].y * H;
       camCtx.beginPath();
@@ -1134,8 +1237,7 @@ function drawFrame(results) {
     });
   });
 
-  /* Palm connections */
-  camCtx.strokeStyle = 'rgba(252,177,166,0.7)';
+  camCtx.strokeStyle = isMatch ? 'rgba(94,207,110,0.7)' : 'rgba(252,177,166,0.7)';
   camCtx.shadowBlur  = 3;
   camCtx.lineWidth   = 2;
   palmConns.forEach(function(c) {
@@ -1149,35 +1251,45 @@ function drawFrame(results) {
 
   camCtx.shadowBlur = 0;
 
-  /* ── Draw landmark dots ── */
   lms.forEach(function(lm, i) {
     var px = (1 - lm.x) * W, py = lm.y * H;
-    var isTip = (i === 4 || i === 8 || i === 12 || i === 16 || i === 20);
+    var isTip   = (i === 4 || i === 8 || i === 12 || i === 16 || i === 20);
     var isWrist = (i === 0);
 
     camCtx.beginPath();
     camCtx.arc(px, py, isTip ? 5 : isWrist ? 6 : 3.5, 0, Math.PI * 2);
 
     if (isTip) {
-      camCtx.fillStyle   = '#FB6376';
-      camCtx.strokeStyle = '#5D2A42';
+      camCtx.fillStyle   = isMatch ? '#5ecf6e' : '#FB6376';
+      camCtx.strokeStyle = isMatch ? '#2d6b38' : '#5D2A42';
       camCtx.lineWidth   = 1.5;
-      camCtx.fill();
-      camCtx.stroke();
+      camCtx.fill(); camCtx.stroke();
     } else if (isWrist) {
-      camCtx.fillStyle   = '#5D2A42';
-      camCtx.strokeStyle = '#FCB1A6';
+      camCtx.fillStyle   = isMatch ? '#2d6b38' : '#5D2A42';
+      camCtx.strokeStyle = isMatch ? '#7de08a' : '#FCB1A6';
       camCtx.lineWidth   = 2;
-      camCtx.fill();
-      camCtx.stroke();
+      camCtx.fill(); camCtx.stroke();
     } else {
-      camCtx.fillStyle   = 'rgba(255,220,204,0.9)';
-      camCtx.strokeStyle = 'rgba(93,42,66,0.6)';
+      camCtx.fillStyle   = isMatch ? 'rgba(168,240,176,0.9)' : 'rgba(255,220,204,0.9)';
+      camCtx.strokeStyle = isMatch ? 'rgba(45,107,56,0.6)'   : 'rgba(93,42,66,0.6)';
       camCtx.lineWidth   = 1;
-      camCtx.fill();
-      camCtx.stroke();
+      camCtx.fill(); camCtx.stroke();
     }
   });
+
+  /* Target letter hint in top-left corner */
+  if (G && G.on && targetLetter) {
+    var pad = 5, label = 'Sign: ' + targetLetter;
+    camCtx.save();
+    camCtx.font = 'bold 13px monospace';
+    camCtx.textAlign = 'left';
+    var tw = camCtx.measureText(label).width;
+    camCtx.fillStyle = isMatch ? 'rgba(45,107,56,0.88)' : 'rgba(20,5,15,0.78)';
+    camCtx.fillRect(6, 6, tw + pad * 2, 22);
+    camCtx.fillStyle = isMatch ? '#c8f5cc' : '#ffdccc';
+    camCtx.fillText(label, 6 + pad, 21);
+    camCtx.restore();
+  }
 }
 
 /* ============================================================
@@ -1240,7 +1352,7 @@ function initCamera() {
 
   }).catch(function(e) {
     console.warn('Camera error:', e);
-    gid('cam-status').textContent = 'No camera — use keyboard';
+    gid('cam-status').textContent = 'No camera - use keyboard';
 
     /* Fallback: clear canvas with a placeholder once */
     if (camCtx) {
@@ -1259,28 +1371,38 @@ function initCamera() {
 function onMPResults(results) {
   lastLMs = null;
 
-  /* Always redraw the canvas (video + skeleton if present) */
-  drawFrame(results);
-
   if (!results.multiHandLandmarks || !results.multiHandLandmarks.length) {
-    gid('detect-letter').textContent  = '—';
+    smoothLandmarks(null);
+    lastDetected = null;
+    drawFrame(results, null);
+    gid('detect-letter').textContent  = '-';
     gid('detect-conf').textContent    = '';
     gid('cam-letter-big').textContent = '';
     runVote(null);
     return;
   }
 
-  var lms = results.multiHandLandmarks[0];
+  var lms = smoothLandmarks(results.multiHandLandmarks[0]);
   lastLMs = lms;
 
   var letter = classifyASL(lms);
+  var usedKNN = false;
+  if (!letter) {
+    var knn = knnClassify(lms);
+    if (knn) { letter = knn; usedKNN = true; }
+  }
 
-  if (letter && LETTERS.indexOf(letter) >= 0) {
-    gid('detect-letter').textContent  = letter;
-    gid('detect-conf').textContent    = '✓';
-    gid('cam-letter-big').textContent = letter;
+  lastDetected = (letter && LETTERS.indexOf(letter) >= 0) ? letter : null;
+
+  /* draw after classification so skeleton color and overlay reflect current frame */
+  drawFrame(results, lms);
+
+  if (lastDetected) {
+    gid('detect-letter').textContent  = lastDetected;
+    gid('detect-conf').textContent    = usedKNN ? 'knn' : '✓';
+    gid('cam-letter-big').textContent = lastDetected;
   } else {
-    gid('detect-letter').textContent  = '—';
+    gid('detect-letter').textContent  = '-';
     gid('detect-conf').textContent    = '';
     gid('cam-letter-big').textContent = '';
   }
@@ -1393,10 +1515,10 @@ function beginWave() {
   oldLetters.forEach(function(l) { weightedPool.push(l); });
   if (oldLetters.length===0) weightedPool = newLetters.slice();
 
-  gid('wvtitle').textContent    = 'Level '+L.n+' · Wave '+(G.wv+1)+' of '+L.waves.length;
+  gid('wvtitle').textContent    = 'Level '+L.n+' - Wave '+(G.wv+1)+' of '+L.waves.length;
   gid('wvsub').textContent      = L.name;
   gid('wv-new').textContent     = (newLetters.length>0&&G.wv===0)?'New letters: '+L.nl:'';
-  gid('wv-letters').textContent = 'Letters in play: '+L.pool.split('').join(' · ');
+  gid('wv-letters').textContent = 'Letters in play: '+L.pool.split('').join(' ');
   var sw = gid('screen-wave');
   sw.classList.remove('hidden');
   setTimeout(function() { sw.classList.add('hidden'); }, 2800);
@@ -1415,11 +1537,11 @@ function beginWave() {
 
 function showLevelComplete() {
   var L = curLvl(), last = G.lvl >= LEVELS.length-1;
-  gid('lctitle').textContent = last?'✦ Grove Saved! ✦':'Level '+L.n+' Complete!';
+  gid('lctitle').textContent = last?'Grove Saved!':'Level '+L.n+' Complete!';
   gid('lcsub').textContent   = last?'You mastered all the signs.':'The creatures are banished.';
   gid('lcnew').textContent   = last?'':('Next up: '+LEVELS[G.lvl+1].nl);
   gid('lcscore').textContent = 'Score: '+G.score;
-  gid('btn-next-level').textContent = last?'Play Again ✦':'Next Level ✦';
+  gid('btn-next-level').textContent = last?'Play Again':'Next Level';
   gid('screen-lc').classList.remove('hidden');
 }
 
@@ -1609,7 +1731,7 @@ function gameOver() {
   gid('plet').textContent='-';
   G.enemies.forEach(function(e){if(e.el&&e.el.parentNode)e.el.remove();});
   G.enemies=[];
-  gid('goscore').textContent='Score: '+G.score+' · Level '+curLvl().n+' Wave '+(G.wv+1);
+  gid('goscore').textContent='Score: '+G.score+' - Level '+curLvl().n+' Wave '+(G.wv+1);
   gid('screen-over').classList.remove('hidden');
 }
 </script>
